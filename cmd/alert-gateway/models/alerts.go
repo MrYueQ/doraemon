@@ -286,7 +286,7 @@ func (u *Alerts) ConfirmAll(confirmList *common.Confirm) error {
 		} else {
 			const AlertStatusOn = 2
 			if rs.Status == AlertStatusOn {
-				_, err = o.Raw("UPDATE alert SET status=1,confirmed_at=?,confirmed_by=?,confirmed_before=? WHERE id=?", now.Format("2006-01-02 15:04:05"), confirmList.User, now.Add(time.Duration(confirmList.Duration)*time.Minute).Format("2006-01-02 15:04:05"), id).Exec()
+				_, err = o.Raw("UPDATE alert SET status=1,confirmed_at=?,confirmed_by=?,confirmed_before=? WHERE id=?", now.Format("2006-01-02 15:04:05"), confirmList.User, now.Add(time.Duration(confirmList.Duration) * time.Minute).Format("2006-01-02 15:04:05"), id).Exec()
 				if err != nil {
 					o.Rollback()
 					return errors.Wrap(err, "database update error")
@@ -353,159 +353,27 @@ func (u *Alerts) AlertsHandler(alert *common.Alerts) {
 			logs.Panic.Error("Panic in AlertsHandler:%v\n%s", e, buf)
 		}
 	}()
-	//rlist := []int64{}
 	Cache := map[int64][]common.UserGroup{}
-	now := time.Now().Format("15:04:05")
 	todayZero, _ := time.ParseInLocation("2006-01-02", "2019-01-01 15:22:22", time.Local)
 	for _, elemt := range *alert {
-		//ruleid, _ := strconv.ParseInt(elemt.Annotations.RuleId, 10, 64)
-		//var orderkey []string
-		//var labels []string
-		//var label string
-		//var firedat time.Time
+
 		var queryres []struct {
 			Id     int64
 			Status uint8
 		}
-		//for key := range elemt.Labels {
-		//	orderkey = append(orderkey, key)
-		//}
-		//sort.Strings(orderkey)
-		//for _, i := range orderkey {
-		//	labels = append(labels, i+"\a"+elemt.Labels[i])
-		//}
-		//hostname := ""
-		//if _, ok := elemt.Labels["instance"]; ok {
-		//	hostname = elemt.Labels["instance"]
-		//	boundary := strings.LastIndex(hostname, ":")
-		//	if boundary != -1 {
-		//		hostname = hostname[:boundary]
-		//	}
-		//}
-		//label = strings.Join(labels, "\v")
-		//firedat = elemt.FiredAt.Truncate(time.Second)
+
 		a := &alertForQuery{Alert: &elemt}
 		a.setFields()
 
 		_, err := Ormer().Raw("SELECT id,status FROM alert WHERE rule_id =? AND labels=? AND fired_at=?", a.ruleId, a.label, a.firedAt).QueryRows(&queryres)
 		if err == nil {
 			if len(queryres) > 0 {
+				// alert has been triggered by post requests before
 				if queryres[0].Status != 0 {
 					const AlertStatusOff = 0
 					if elemt.State == AlertStatusOff {
-						//rlist = append(rlist, queryres[0].Id)
-						recoverInfo := struct {
-							Id       int64
-							Count    int
-							Hostname string
-						}{}
-						o := orm.NewOrm()
-						o.Begin()
-						err = o.Raw("SELECT id,count,hostname From alert WHERE rule_id =? AND labels=? AND fired_at=? FOR UPDATE", a.ruleId, a.label, a.firedAt).QueryRow(&recoverInfo)
-						if err == nil {
-							if recoverInfo.Id != 0 {
-								_, err = o.Raw("UPDATE alert SET status=?,summary=?,description=?,value=?,resolved_at=? WHERE id=?", elemt.State, elemt.Annotations.Summary, elemt.Annotations.Description, elemt.Value, elemt.ResolvedAt, recoverInfo.Id).Exec()
-								if err == nil {
-									//logs.Alertloger.Info("AlertRecovered:%s", elemt)
-									common.Rw.RLock()
-									if _, ok := common.Maintain[a.hostname]; !ok {
-										var userGroupList []common.UserGroup
-										var planId struct {
-											PlanId  int64
-											Summary string
-										}
-										Ormer().Raw("SELECT plan_id,summary FROM rule WHERE id=?", a.ruleId).QueryRow(&planId)
-										if _, ok := Cache[planId.PlanId]; !ok {
-											Ormer().Raw("SELECT id,start_time,end_time,start,period,reverse_polish_notation,user,`group`,duty_group,method FROM plan_receiver WHERE plan_id=? AND (method='LANXIN' OR method LIKE 'HOOK %')", planId.PlanId).QueryRows(&userGroupList)
-											Cache[planId.PlanId] = userGroupList
-										}
-										for _, element := range Cache[planId.PlanId] {
-											if element.IsValid() && element.IsOnDuty() {
-												if recoverInfo.Count >= element.Start {
-													sendFlag := false
-													if recoverInfo.Count-element.Start >= element.Period {
-														sendFlag = true
-													} else {
-														if _, ok := common.RuleCount[[2]int64{a.ruleId, int64(element.Start)}]; ok {
-															logs.Panic.Debug("[%s] id:%d,rulecount:%d,count:%d,start:%d,period:%d", now, recoverInfo.Id, common.RuleCount[[2]int64{a.ruleId, int64(element.Start)}], recoverInfo.Count, element.Start, element.Period)
-															if common.RuleCount[[2]int64{a.ruleId, int64(element.Start)}] >= int64(recoverInfo.Count-element.Start) {
-																logs.Panic.Debug("[%s] id:%d %d,%s", now, recoverInfo.Id, (common.RuleCount[[2]int64{a.ruleId, int64(element.Start)}]-int64(recoverInfo.Count)+int64(element.Start))%int64(element.Period), common.RuleCount[[2]int64{a.ruleId, int64(element.Start)}]-((common.RuleCount[[2]int64{a.ruleId, int64(element.Start)}]-int64(recoverInfo.Count)+int64(element.Start))/int64(element.Period))*int64(element.Period) >= int64(element.Period))
-																if (common.RuleCount[[2]int64{a.ruleId, int64(element.Start)}]-int64(recoverInfo.Count)+int64(element.Start))%int64(element.Period) == 0 || common.RuleCount[[2]int64{a.ruleId, int64(element.Start)}]-((common.RuleCount[[2]int64{a.ruleId, int64(element.Start)}]-int64(recoverInfo.Count)+int64(element.Start))/int64(element.Period))*int64(element.Period) >= int64(element.Period) {
-																	sendFlag = true
-																}
-															}
-														}
-													}
-													if sendFlag {
-														if element.ReversePolishNotation == "" || common.CalculateReversePolishNotation(elemt.Labels, element.ReversePolishNotation) {
-															common.Lock.Lock()
-															if _, ok := common.Recover2Send[element.Method]; !ok {
-																common.Recover2Send[element.Method] = map[[2]int64]*common.Ready2Send{[2]int64{a.ruleId, element.Id}: &common.Ready2Send{
-																	RuleId: a.ruleId,
-																	Start:  element.Id,
-																	User: SendAlertsFor(&common.ValidUserGroup{
-																		User:      element.User,
-																		Group:     element.Group,
-																		DutyGroup: element.DutyGroup,
-																	}),
-																	Alerts: []common.SingleAlert{common.SingleAlert{
-																		Id:       recoverInfo.Id,
-																		Count:    recoverInfo.Count,
-																		Value:    elemt.Value,
-																		Summary:  elemt.Annotations.Summary,
-																		Hostname: recoverInfo.Hostname,
-																	}},
-																}}
-															} else {
-																if _, ok := common.Recover2Send[element.Method][[2]int64{a.ruleId, element.Id}]; !ok {
-																	common.Recover2Send[element.Method][[2]int64{a.ruleId, element.Id}] = &common.Ready2Send{
-																		RuleId: a.ruleId,
-																		Start:  element.Id,
-																		User: SendAlertsFor(&common.ValidUserGroup{
-																			User:      element.User,
-																			Group:     element.Group,
-																			DutyGroup: element.DutyGroup,
-																		}),
-																		Alerts: []common.SingleAlert{common.SingleAlert{
-																			Id:       recoverInfo.Id,
-																			Count:    recoverInfo.Count,
-																			Value:    elemt.Value,
-																			Summary:  elemt.Annotations.Summary,
-																			Hostname: recoverInfo.Hostname,
-																			Labels:   elemt.Labels,
-																		}},
-																	}
-																} else {
-																	common.Recover2Send[element.Method][[2]int64{a.ruleId, element.Id}].Alerts = append(common.Recover2Send[element.Method][[2]int64{a.ruleId, element.Id}].Alerts, common.SingleAlert{
-																		Id:       recoverInfo.Id,
-																		Count:    recoverInfo.Count,
-																		Value:    elemt.Value,
-																		Summary:  elemt.Annotations.Summary,
-																		Hostname: recoverInfo.Hostname,
-																	})
-																}
-															}
-															//logs.Panic.Debug("[%s] %v",common.Recover2Send["LANXIN"])
-															common.Lock.Unlock()
-														}
-													}
-												}
-											}
-										}
-									}
-									common.Rw.RUnlock()
-									o.Commit()
-								} else {
-									o.Rollback()
-									//logs.Alertloger.Error("models.AlertsHandler alertsrecover sql error:%s", err.Error())
-								}
-							}
-							o.Commit()
-						} else {
-							o.Rollback()
-							Ormer().Raw("UPDATE alert SET status=?,summary=?,description=?,value=?,resolved_at=? WHERE id=?", elemt.State, elemt.Annotations.Summary, elemt.Annotations.Description, elemt.Value, elemt.ResolvedAt, recoverInfo.Id).Exec() //if exceed the max waiting time for getting the lock
-						}
-						//send the recover message
+						// handle the recover message
+						recoverAlert(*a, Cache)
 					} else {
 						Ormer().Raw("UPDATE alert SET summary=?,description=?,value=? WHERE rule_id =? AND labels=? AND fired_at=?", elemt.Annotations.Summary, elemt.Annotations.Description, elemt.Value, a.ruleId, a.label, a.firedAt).Exec()
 					}
@@ -513,6 +381,7 @@ func (u *Alerts) AlertsHandler(alert *common.Alerts) {
 					continue
 				}
 			} else {
+				// insert an new alert
 				var alert Alerts
 				alert.Id = 0 //reset the "Id" to 0,which is very important:after a record is inserted,the value of "Id" will not be 0,but the auto primary key of the record
 				alert.Rule = &Rules{Id: a.ruleId}
@@ -535,4 +404,100 @@ func (u *Alerts) AlertsHandler(alert *common.Alerts) {
 		}
 	}
 	//logs.Panic.Debug("[%s] recoverid: %v", now, rlist)
+}
+
+/*
+ whether recovery should be send
+*/
+func shouldSend(alertId, ruleId int64, alertCount int, ug common.UserGroup) (sendFlag bool) {
+	//sendFlag := false
+	if alertCount-ug.Start >= ug.Period {
+		sendFlag = true
+	} else {
+		if _, ok := common.RuleCount[[2]int64{ruleId, int64(ug.Start)}]; ok {
+			logs.Panic.Debug("id:%d,rulecount:%d,count:%d,start:%d,period:%d", alertId, common.RuleCount[[2]int64{ruleId, int64(ug.Start)}], alertCount, ug.Start, ug.Period)
+			if common.RuleCount[[2]int64{ruleId, int64(ug.Start)}] >= int64(alertCount-ug.Start) {
+				logs.Panic.Debug("[%s] id:%d %d,%s", alertId, (common.RuleCount[[2]int64{ruleId, int64(ug.Start)}]-int64(alertCount)+int64(ug.Start))%int64(ug.Period), common.RuleCount[[2]int64{ruleId, int64(ug.Start)}]-((common.RuleCount[[2]int64{ruleId, int64(ug.Start)}]-int64(alertCount)+int64(ug.Start))/int64(ug.Period))*int64(ug.Period) >= int64(ug.Period))
+				if (common.RuleCount[[2]int64{ruleId, int64(ug.Start)}]-int64(alertCount)+int64(ug.Start))%int64(ug.Period) == 0 || common.RuleCount[[2]int64{ruleId, int64(ug.Start)}]-((common.RuleCount[[2]int64{ruleId, int64(ug.Start)}]-int64(alertCount)+int64(ug.Start))/int64(ug.Period))*int64(ug.Period) >= int64(ug.Period) {
+					sendFlag = true
+				}
+			}
+		}
+	}
+
+	return
+}
+
+/*
+ process for receiving an recovery alert:
+*/
+func recoverAlert(a alertForQuery, cache map[int64][]common.UserGroup) {
+
+	recoverInfo := struct {
+		Id       int64
+		Count    int
+		Hostname string
+	}{}
+	o := orm.NewOrm()
+	o.Begin()
+	err := o.Raw("SELECT id,count,hostname From alert WHERE rule_id =? AND labels=? AND fired_at=? FOR UPDATE", a.ruleId, a.label, a.firedAt).QueryRow(&recoverInfo)
+	if err == nil {
+		if recoverInfo.Id != 0 {
+			// update alert state
+			_, err = o.Raw("UPDATE alert SET status=?,summary=?,description=?,value=?,resolved_at=? WHERE id=?", a.State, a.Annotations.Summary, a.Annotations.Description, a.Value, a.ResolvedAt, recoverInfo.Id).Exec()
+			if err == nil {
+				// lock for reading map common.Maintain
+				common.Rw.RLock()
+				if _, ok := common.Maintain[a.hostname]; !ok {
+					var userGroupList []common.UserGroup
+					var planId struct {
+						PlanId  int64
+						Summary string
+					}
+					Ormer().Raw("SELECT plan_id,summary FROM rule WHERE id=?", a.ruleId).QueryRow(&planId)
+					if _, ok := cache[planId.PlanId]; !ok {
+						Ormer().Raw("SELECT id,start_time,end_time,start,period,reverse_polish_notation,user,`group`,duty_group,method FROM plan_receiver WHERE plan_id=? AND (method='LANXIN' OR method LIKE 'HOOK %')", planId.PlanId).QueryRows(&userGroupList)
+						cache[planId.PlanId] = userGroupList
+					}
+					for _, element := range cache[planId.PlanId] {
+
+						if !(element.IsValid() && element.IsOnDuty()) {
+							continue
+						}
+
+						if !(recoverInfo.Count >= element.Start) {
+							continue
+						}
+
+						if ok := shouldSend(recoverInfo.Id, a.ruleId, recoverInfo.Count, element); !ok {
+							continue
+						}
+
+						if element.ReversePolishNotation != "" && !common.CalculateReversePolishNotation(a.Labels, element.ReversePolishNotation) {
+							continue
+						}
+
+						// merge users
+						users := SendAlertsFor(&common.ValidUserGroup{
+							User:      element.User,
+							Group:     element.Group,
+							DutyGroup: element.DutyGroup,
+						})
+
+						// update Recover2Send, other goroutines in timer.go will handle it
+						common.UpdateRecovery2Send(element, *a.Alert, users, recoverInfo.Id, recoverInfo.Count, recoverInfo.Hostname)
+					}
+				}
+				common.Rw.RUnlock()
+				o.Commit()
+			} else {
+				o.Rollback()
+				//logs.Alertloger.Error("models.AlertsHandler alertsrecover sql error:%s", err.Error())
+			}
+		}
+		o.Commit()
+	} else {
+		o.Rollback()
+		Ormer().Raw("UPDATE alert SET status=?,summary=?,description=?,value=?,resolved_at=? WHERE id=?", a.State, a.Annotations.Summary, a.Annotations.Description, a.Value, a.ResolvedAt, recoverInfo.Id).Exec() //if exceed the max waiting time for getting the lock
+	}
 }
